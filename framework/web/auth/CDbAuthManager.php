@@ -49,6 +49,10 @@ class CDbAuthManager extends CAuthManager
 
 	private $_usingSqlite;
 
+	private $_parentsCache = [];
+	private $_authItemsCache = [];
+	private $_authAssignmentsCache = [];
+
 	/**
 	 * Initializes the application component.
 	 * This method overrides the parent implementation by establishing the database connection.
@@ -69,10 +73,10 @@ class CDbAuthManager extends CAuthManager
 	 * Since version 1.1.11 a param with name 'userId' is added to this array, which holds the value of <code>$userId</code>.
 	 * @return boolean whether the operations can be performed by the user.
 	 */
-	public function checkAccess($itemName,$userId,$params=array())
+	public function checkAccess($itemName,$userId,$params=array(),$allowSomeCache=true)
 	{
-		$assignments=$this->getAuthAssignments($userId);
-		return $this->checkAccessRecursive($itemName,$userId,$params,$assignments);
+		$assignments=$this->getAuthAssignments($userId,$allowSomeCache);
+		return $this->checkAccessRecursive($itemName,$userId,$params,$assignments,$allowSomeCache);
 	}
 
 	/**
@@ -88,9 +92,9 @@ class CDbAuthManager extends CAuthManager
 	 * @return boolean whether the operations can be performed by the user.
 	 * @since 1.1.3
 	 */
-	protected function checkAccessRecursive($itemName,$userId,$params,$assignments)
+	protected function checkAccessRecursive($itemName,$userId,$params,$assignments,$allowSomeCache=true)
 	{
-		if(($item=$this->getAuthItem($itemName))===null)
+		if(($item=$this->getAuthItem($itemName,$allowSomeCache))===null)
 			return false;
 		Yii::trace('Checking permission "'.$item->getName().'"','system.web.auth.CDbAuthManager');
 		if(!isset($params['userId']))
@@ -105,11 +109,15 @@ class CDbAuthManager extends CAuthManager
 				if($this->executeBizRule($assignment->getBizRule(),$params,$assignment->getData()))
 					return true;
 			}
-			$parents=$this->db->createCommand()
+			if(!$allowSomeCache || !isset($this->_parentsCache[$itemName])) {
+				$this->_parentsCache[$itemName]=$this->db->createCommand()
 				->select('parent')
 				->from($this->itemChildTable)
 				->where('child=:name', array(':name'=>$itemName))
 				->queryColumn();
+			}
+			$parents = $this->_parentsCache[$itemName];
+
 			foreach($parents as $parent)
 			{
 				if($this->checkAccessRecursive($parent,$userId,$params,$assignments))
@@ -303,7 +311,7 @@ class CDbAuthManager extends CAuthManager
 	 * @return CAuthAssignment the item assignment information. Null is returned if
 	 * the item is not assigned to the user.
 	 */
-	public function getAuthAssignment($itemName,$userId)
+	public function getAuthAssignment($itemName,$userId,$allowSomeCache=true)
 	{
 		$row=$this->db->createCommand()
 			->select()
@@ -312,6 +320,7 @@ class CDbAuthManager extends CAuthManager
 				':itemname'=>$itemName,
 				':userid'=>$userId))
 			->queryRow();
+
 		if($row!==false)
 		{
 			if(($data=@unserialize($row['data']))===false)
@@ -328,13 +337,16 @@ class CDbAuthManager extends CAuthManager
 	 * @return array the item assignment information for the user. An empty array will be
 	 * returned if there is no item assigned to the user.
 	 */
-	public function getAuthAssignments($userId)
+	public function getAuthAssignments($userId,$allowSomeCache=true)
 	{
-		$rows=$this->db->createCommand()
-			->select()
-			->from($this->assignmentTable)
-			->where('userid=:userid', array(':userid'=>$userId))
-			->queryAll();
+		if(!$allowSomeCache || !isset($this->_authAssignmentsCache[$userId])) {
+			$this->_authAssignmentsCache[$userId]=$this->db->createCommand()
+				->select()
+				->from($this->assignmentTable)
+				->where('userid=:userid', array(':userid'=>$userId))
+				->queryAll();
+		}
+		$rows=$this->_authAssignmentsCache[$userId];
 		$assignments=array();
 		foreach($rows as $row)
 		{
@@ -476,13 +488,16 @@ class CDbAuthManager extends CAuthManager
 	 * @param string $name the name of the item
 	 * @return CAuthItem the authorization item. Null if the item cannot be found.
 	 */
-	public function getAuthItem($name)
+	public function getAuthItem($name,$allowSomeCache=true)
 	{
-		$row=$this->db->createCommand()
-			->select()
-			->from($this->itemTable)
-			->where('name=:name', array(':name'=>$name))
-			->queryRow();
+		if(!$allowSomeCache || !isset($this->_authItemsCache[$name])) {
+			$this->_authItemsCache[$name] = $this->db->createCommand()
+				->select()
+				->from($this->itemTable)
+				->where('name=:name', array(':name'=>$name))
+				->queryRow();
+		}
+		$row=$this->_authItemsCache[$name];
 
 		if($row!==false)
 		{
